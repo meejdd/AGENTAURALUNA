@@ -24,19 +24,19 @@ async function sheetRequest(payload) {
     body: JSON.stringify(payload),
   });
 
-  const text = await response.text();
+  const responseText = await response.text();
 
   if (!response.ok) {
     throw new Error(
-      `Apps Script error ${response.status}: ${text}`
+      `Apps Script error ${response.status}: ${responseText}`
     );
   }
 
   try {
-    return JSON.parse(text);
+    return JSON.parse(responseText);
   } catch (error) {
     throw new Error(
-      `Apps Script did not return JSON: ${text.slice(0, 300)}`
+      `Apps Script did not return JSON: ${responseText.slice(0, 300)}`
     );
   }
 }
@@ -124,9 +124,7 @@ function extractPhoneFromText(text) {
     return normalizePhone(`0${international[1]}`);
   }
 
-  const local = value.match(
-    /0[567][\d\s-]{8,}/i
-  );
+  const local = value.match(/0[567][\d\s-]{8,}/i);
 
   if (local) {
     return normalizePhone(local[0]);
@@ -135,14 +133,28 @@ function extractPhoneFromText(text) {
   return "";
 }
 
+// ============================================================
+// HELPERS
+// ============================================================
+
 function cleanText(value) {
   return typeof value === "string"
     ? value.trim()
     : "";
 }
 
+function looksLikeOrder(text) {
+  if (!text || text.length < 10) {
+    return false;
+  }
+
+  return /\d{5,}/.test(
+    String(text).replace(/[\s-]/g, "")
+  );
+}
+
 // ============================================================
-// CLAUDE ORDER EXTRACTION
+// ORDER EXTRACTION WITH CLAUDE
 // ============================================================
 
 async function extractOrder(text) {
@@ -151,18 +163,16 @@ async function extractOrder(text) {
     max_tokens: 300,
 
     system:
-      "You extract order details from a WhatsApp message written by a customer. " +
+      "You extract order details from a Moroccan WhatsApp message. " +
 
-      "Fields can appear in ANY order in the text. They can be on separate lines, in one sentence, missing, or misspelled. " +
+      "Fields can appear in ANY order. They can be on separate lines, in one sentence, missing, or misspelled. " +
 
-      "This is a Moroccan WhatsApp order. " +
-
-      "Return ONLY strict JSON, no explanation and no markdown, with exactly these keys: " +
+      "Return ONLY strict JSON with exactly these keys: " +
       '"name", "number", "address", "city", "products", "quantity", "price". ' +
 
-      "Do NOT decide a field by its position in the message. Use the meaning of the words. " +
+      "Do not decide what a field means from its position in the message. Use the meaning of the words. " +
 
-      "A neighborhood, street, area, quartier, residence, landmark, or place such as Hay Riad belongs in address, not city. " +
+      "A neighborhood, street, area, quartier, residence, or landmark belongs in address, not city. " +
 
       "Common Moroccan cities include Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, " +
       "Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, " +
@@ -172,7 +182,8 @@ async function extractOrder(text) {
 
       "If a place is one of these cities, even if misspelled, use it as city. " +
 
-      "Product names are products, not customer names. For example ENZO MACADAMIA is products. " +
+      "CRITICAL RULE: any text containing the word ENZO is ALWAYS a product. " +
+      "Put ENZO or ENZO MACADAMIA in products, never in name, regardless of where it appears in the message. " +
 
       "If products are present but quantity is not written, set quantity to 1. " +
 
@@ -218,11 +229,7 @@ async function extractOrder(text) {
 
     return order;
   } catch (error) {
-    console.error(
-      "Could not parse Claude response:",
-      raw
-    );
-
+    console.error("Could not parse Claude response:", raw);
     return null;
   }
 }
@@ -236,7 +243,7 @@ function validateNormalOrder(order) {
     return false;
   }
 
-  const required = [
+  const requiredFields = [
     "name",
     "number",
     "address",
@@ -246,7 +253,7 @@ function validateNormalOrder(order) {
     "price",
   ];
 
-  for (const field of required) {
+  for (const field of requiredFields) {
     if (!cleanText(order[field])) {
       return false;
     }
@@ -273,18 +280,8 @@ function validateNormalOrder(order) {
   return true;
 }
 
-function looksLikeOrder(text) {
-  if (!text || text.length < 10) {
-    return false;
-  }
-
-  return /\d{5,}/.test(
-    String(text).replace(/[\s-]/g, "")
-  );
-}
-
 // ============================================================
-// CHANGE ORDER
+// CHANGE
 // ============================================================
 
 async function processChange(message) {
@@ -328,7 +325,7 @@ async function processChange(message) {
     return;
   }
 
-  const row = {
+  await appendToSheet({
     name: `CHANGE (${oldOrder.ma})`,
     number,
     address: oldOrder.address,
@@ -336,9 +333,7 @@ async function processChange(message) {
     products: newOrder.products,
     quantity: newOrder.quantity,
     price: newOrder.price,
-  };
-
-  await appendToSheet(row);
+  });
 
   await reactToMessage(message.id, "✅");
 }
@@ -360,18 +355,12 @@ app.post("/webhook", (req, res) => {
     for (const message of messages) {
       const text = message.text?.body || "";
 
-      console.log(
-        `Message from chat_id=${message.chat_id}, ` +
-        `from_me=${message.from_me}, text="${text}"`
-      );
-
       if (message.from_me) {
         continue;
       }
 
       if (
-        message.chat_id !==
-        process.env.WHATSAPP_GROUP_ID
+        message.chat_id !== process.env.WHATSAPP_GROUP_ID
       ) {
         continue;
       }
@@ -388,7 +377,14 @@ app.post("/webhook", (req, res) => {
 
         const order = await extractOrder(text);
 
+        console.log(
+          "Extracted order:",
+          JSON.stringify(order)
+        );
+
         if (!validateNormalOrder(order)) {
+          console.log("Invalid order:", order);
+
           await reactToMessage(message.id, "❌");
           continue;
         }
