@@ -31,6 +31,18 @@ async function replyToMessage(chatId, text) {
   });
 }
 
+// ---------- REACT TO A MESSAGE WITH AN EMOJI VIA WHAPI ----------
+async function reactToMessage(messageId, emoji) {
+  await fetch(`https://gate.whapi.cloud/messages/${messageId}/reaction`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.WHAPI_TOKEN}`,
+    },
+    body: JSON.stringify({ emoji }),
+  });
+}
+
 // ---------- ORDER EXTRACTION WITH CLAUDE ----------
 async function extractOrder(text) {
   const msg = await anthropic.messages.create({
@@ -39,8 +51,19 @@ async function extractOrder(text) {
     system:
       "You extract order details from a WhatsApp message written by a customer. " +
       "Fields can appear in ANY order in the text, and some may be missing or misspelled. " +
+      "This is a Moroccan WhatsApp order, often written as separate lines with no labels. " +
+      "A neighborhood, street name, or area name (even if you don't recognize it) almost always belongs in \"address\", not \"city\" — " +
+      "prefer extracting an uncertain line as \"address\" rather than leaving it out entirely. " +
+      "Here is a reference list of common Moroccan cities: Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, " +
+      "Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, Larache, " +
+      "Ksar El Kebir, Khemisset, Guelmim, Berrechid, Wazzan, Taourirt, Berkane, Sidi Slimane, Errachidia, Sidi Kacem, " +
+      "Essaouira, Khenifra, Tiznit, Ouarzazate, Ifrane, Al Hoceima, Taroudant, Chefchaouen, Fquih Ben Salah, Youssoufia, Azrou. " +
+      "If a line matches (even loosely/misspelled) one of these cities, use it as \"city\". " +
+      "If a line does NOT match one of these cities but still looks like a place (neighborhood, street, landmark, \"7da\", \"quartier\", etc.), use it as \"address\" instead of discarding it. " +
       'Return ONLY strict JSON, no explanation, no markdown, with exactly these keys: ' +
-      '"name", "number", "address", "city", "products", "price". ' +
+      '"name", "number", "address", "city", "products", "quantity", "price". ' +
+      '"quantity" is the number of items ordered (a plain number like 1, 2, 3). ' +
+      '"price" must be digits ONLY, with no currency text like "dh", "DH", "dhs", or "MAD" and no spaces (e.g. "350", not "350dh"). ' +
       "If a field is not present in the message, set its value to null. " +
       "Do not invent information that is not in the text.",
     messages: [{ role: "user", content: text }],
@@ -96,6 +119,15 @@ app.post("/webhook", async (req, res) => {
       }
 
       const text = message.text && message.text.body;
+
+      // If the message mentions "change", reply with the special notice
+      // and don't process it as an order.
+      if (text && /change/i.test(text)) {
+        console.log('Detected "change" keyword, sending SAISIW CHANGE reply.');
+        await replyToMessage(message.chat_id, "SAISIW CHANGE");
+        continue;
+      }
+
       if (!looksLikeOrder(text)) {
         console.log("Skipped: doesn't look like an order (too short or no number).");
         continue;
@@ -103,8 +135,15 @@ app.post("/webhook", async (req, res) => {
 
       const order = await extractOrder(text);
       if (!order) {
-        await replyToMessage(message.chat_id, "❌ Could not read this order, please check the format.");
+        await reactToMessage(message.id, "❌");
         continue;
+      }
+      console.log("Extracted:", JSON.stringify(order));
+
+      // Safety net: strip anything that isn't a digit from the price,
+      // in case "dh"/"DH"/spaces etc slipped through.
+      if (order.price) {
+        order.price = String(order.price).replace(/\D/g, "");
       }
 
       const { valid, missing } = validate(order);
@@ -115,14 +154,16 @@ app.post("/webhook", async (req, res) => {
         address: order.address || "",
         city: order.city || "",
         products: order.products || "",
+        quantity: order.quantity || "",
         price: order.price || "",
         status: valid ? "✅" : "❌",
       });
 
       if (valid) {
-        await replyToMessage(message.chat_id, "✅ Order saved.");
+        await reactToMessage(message.id, "✅");
       } else {
-        await replyToMessage(message.chat_id, `❌ Missing: ${missing.join(", ")}`);
+        await reactToMessage(message.id, "❌");
+        console.log(`Missing fields: ${missing.join(", ")}`);
       }
     }
   } catch (err) {
