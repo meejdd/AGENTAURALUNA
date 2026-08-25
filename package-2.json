@@ -1,0 +1,16 @@
+{
+  "name": "whatsapp-order-agent",
+  "version": "1.0.0",
+  "description": "Reads orders from a WhatsApp group and writes them to Google Sheets, with a check/cross reply.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.26.0",
+    "qrcode-terminal": "^0.12.0",
+    "@anthropic-ai/sdk": "^0.30.1",
+    "dotenv": "^16.4.5"
+  }
+}
