@@ -138,9 +138,11 @@ function extractPhoneFromText(text) {
 // ============================================================
 
 function cleanText(value) {
-  return typeof value === "string"
-    ? value.trim()
-    : "";
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
 }
 
 function looksLikeOrder(text) {
@@ -281,7 +283,7 @@ function validateNormalOrder(order) {
 }
 
 // ============================================================
-// CHANGE
+// CHANGE ORDER
 // ============================================================
 
 async function processChange(message) {
