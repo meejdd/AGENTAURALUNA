@@ -11,10 +11,6 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// ============================================================
-// GOOGLE SHEETS
-// ============================================================
-
 async function sheetRequest(payload) {
   const response = await fetch(process.env.APPS_SCRIPT_URL, {
     method: "POST",
@@ -32,13 +28,7 @@ async function sheetRequest(payload) {
     );
   }
 
-  try {
-    return JSON.parse(responseText);
-  } catch (error) {
-    throw new Error(
-      `Apps Script did not return JSON: ${responseText.slice(0, 300)}`
-    );
-  }
+  return JSON.parse(responseText);
 }
 
 async function appendToSheet(row) {
@@ -50,7 +40,7 @@ async function appendToSheet(row) {
 
   if (!result.success) {
     throw new Error(
-      result.error || "Could not write order to WTSP ORDERS"
+      result.error || "Could not write to WTSP ORDERS"
     );
   }
 }
@@ -62,10 +52,6 @@ async function findLastOrderByNumber(number) {
     number,
   });
 }
-
-// ============================================================
-// WHAPI REACTION
-// ============================================================
 
 async function reactToMessage(messageId, emoji) {
   const response = await fetch(
@@ -88,10 +74,6 @@ async function reactToMessage(messageId, emoji) {
     );
   }
 }
-
-// ============================================================
-// PHONE
-// ============================================================
 
 function normalizePhone(value) {
   let number = String(value || "").replace(/\D/g, "");
@@ -133,10 +115,6 @@ function extractPhoneFromText(text) {
   return "";
 }
 
-// ============================================================
-// HELPERS
-// ============================================================
-
 function cleanText(value) {
   if (value === null || value === undefined) {
     return "";
@@ -155,10 +133,6 @@ function looksLikeOrder(text) {
   );
 }
 
-// ============================================================
-// ORDER EXTRACTION WITH CLAUDE
-// ============================================================
-
 async function extractOrder(text) {
   const msg = await anthropic.messages.create({
     model: "claude-haiku-4-5",
@@ -166,38 +140,16 @@ async function extractOrder(text) {
 
     system:
       "You extract order details from a Moroccan WhatsApp message. " +
-
-      "Fields can appear in ANY order. They can be on separate lines, in one sentence, missing, or misspelled. " +
-
+      "Fields can appear in ANY order. " +
       "Return ONLY strict JSON with exactly these keys: " +
       '"name", "number", "address", "city", "products", "quantity", "price". ' +
-
-      "Do not decide what a field means from its position in the message. Use the meaning of the words. " +
-
       "A neighborhood, street, area, quartier, residence, or landmark belongs in address, not city. " +
-
-      "Common Moroccan cities include Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, " +
-      "Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, " +
-      "Larache, Ksar El Kebir, Khemisset, Guelmim, Berrechid, Wazzan, Taourirt, Berkane, Sidi Slimane, " +
-      "Errachidia, Sidi Kacem, Essaouira, Khenifra, Tiznit, Ouarzazate, Ifrane, Al Hoceima, Taroudant, " +
-      "Chefchaouen, Fquih Ben Salah, Youssoufia, Azrou. " +
-
-      "If a place is one of these cities, even if misspelled, use it as city. " +
-
-      "CRITICAL RULE: any text containing the word ENZO is ALWAYS a product. " +
-      "Put ENZO or ENZO MACADAMIA in products, never in name, regardless of where it appears in the message. " +
-
+      "Common Moroccan cities include Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, Larache, Ksar El Kebir, Khemisset, Guelmim, Berrechid, Wazzan, Taourirt, Berkane, Sidi Slimane, Errachidia, Sidi Kacem, Essaouira, Khenifra, Tiznit, Ouarzazate, Ifrane, Al Hoceima, Taroudant, Chefchaouen, Fquih Ben Salah, Youssoufia, Azrou. " +
+      "CRITICAL RULE: any text containing ENZO is ALWAYS a product, never a customer name. " +
       "If products are present but quantity is not written, set quantity to 1. " +
-
-      "quantity must be a plain number like 1, 2, or 3. " +
-
-      "price must contain digits only, without dh, DH, DHS, MAD, or spaces. " +
-
-      "number must contain digits only, without +212, spaces, or dashes. " +
-      "If number starts with +212, replace +212 with a leading 0. " +
-
-      "If a field is not present, set it to null. " +
-      "Do not invent information.",
+      "price must contain digits only. " +
+      "number must contain digits only; convert +212 to a leading 0. " +
+      "If a field is missing, set it to null. Do not invent information.",
 
     messages: [
       {
@@ -236,10 +188,6 @@ async function extractOrder(text) {
   }
 }
 
-// ============================================================
-// NORMAL ORDER VALIDATION
-// ============================================================
-
 function validateNormalOrder(order) {
   if (!order) {
     return false;
@@ -261,34 +209,17 @@ function validateNormalOrder(order) {
     }
   }
 
-  if (!normalizePhone(order.number)) {
-    return false;
-  }
-
-  if (
-    !/^\d+$/.test(String(order.quantity)) ||
-    Number(order.quantity) <= 0
-  ) {
-    return false;
-  }
-
-  if (
-    !/^\d+$/.test(String(order.price)) ||
-    Number(order.price) <= 0
-  ) {
-    return false;
-  }
-
-  return true;
+  return (
+    Boolean(normalizePhone(order.number)) &&
+    /^\d+$/.test(String(order.quantity)) &&
+    Number(order.quantity) > 0 &&
+    /^\d+$/.test(String(order.price)) &&
+    Number(order.price) > 0
+  );
 }
-
-// ============================================================
-// CHANGE ORDER
-// ============================================================
 
 async function processChange(message) {
   const text = message.text?.body || "";
-
   const newOrder = await extractOrder(text);
 
   if (!newOrder) {
@@ -335,24 +266,17 @@ async function processChange(message) {
     products: newOrder.products,
     quantity: newOrder.quantity,
     price: newOrder.price,
+    senderName: message.from_name || "",
   });
 
   await reactToMessage(message.id, "✅");
 }
-
-// ============================================================
-// WEBHOOK
-// ============================================================
 
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 
   void (async () => {
     const messages = req.body.messages || [];
-
-    console.log(
-      `Webhook hit. ${messages.length} message(s) in payload.`
-    );
 
     for (const message of messages) {
       const text = message.text?.body || "";
@@ -399,6 +323,7 @@ app.post("/webhook", (req, res) => {
           products: order.products,
           quantity: order.quantity,
           price: order.price,
+          senderName: message.from_name || "",
         });
 
         await reactToMessage(message.id, "✅");
@@ -410,10 +335,6 @@ app.post("/webhook", (req, res) => {
     }
   })();
 });
-
-// ============================================================
-// HEALTH CHECK
-// ============================================================
 
 app.get("/", (_req, res) => {
   res.send("WhatsApp order agent is running.");
