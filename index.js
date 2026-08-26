@@ -11,6 +11,10 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// ============================================================
+// GOOGLE SHEETS
+// ============================================================
+
 async function sheetRequest(payload) {
   const response = await fetch(process.env.APPS_SCRIPT_URL, {
     method: "POST",
@@ -53,6 +57,10 @@ async function findLastOrderByNumber(number) {
   });
 }
 
+// ============================================================
+// WHAPI
+// ============================================================
+
 async function reactToMessage(messageId, emoji) {
   const response = await fetch(
     `https://gate.whapi.cloud/messages/${messageId}/reaction`,
@@ -73,6 +81,18 @@ async function reactToMessage(messageId, emoji) {
       await response.text()
     );
   }
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+function cleanText(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
 }
 
 function normalizePhone(value) {
@@ -115,14 +135,6 @@ function extractPhoneFromText(text) {
   return "";
 }
 
-function cleanText(value) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  return String(value).trim();
-}
-
 function looksLikeOrder(text) {
   if (!text || text.length < 10) {
     return false;
@@ -132,6 +144,63 @@ function looksLikeOrder(text) {
     String(text).replace(/[\s-]/g, "")
   );
 }
+
+// ============================================================
+// PRODUCTS AND QUANTITIES
+// ============================================================
+
+function normalizeProductsAndQuantity(order) {
+  let productList = [];
+
+  if (Array.isArray(order.products)) {
+    productList = order.products
+      .map(cleanText)
+      .filter(Boolean);
+  } else if (cleanText(order.products)) {
+    productList = [cleanText(order.products)];
+  }
+
+  if (productList.length > 0) {
+    order.products = productList.join(" | ");
+  }
+
+  let quantityTotal = 0;
+
+  if (Array.isArray(order.quantity)) {
+    for (const quantity of order.quantity) {
+      const number = Number(quantity);
+
+      if (Number.isFinite(number) && number > 0) {
+        quantityTotal += number;
+      }
+    }
+  } else if (
+    order.quantity !== null &&
+    order.quantity !== undefined &&
+    cleanText(order.quantity)
+  ) {
+    const number = Number(order.quantity);
+
+    if (Number.isFinite(number) && number > 0) {
+      quantityTotal = number;
+    }
+  }
+
+  // No explicit quantities: one unit for every detected product.
+  if (quantityTotal === 0 && productList.length > 0) {
+    quantityTotal = productList.length;
+  }
+
+  order.quantity = quantityTotal
+    ? String(quantityTotal)
+    : "";
+
+  return order;
+}
+
+// ============================================================
+// CLAUDE EXTRACTION
+// ============================================================
 
 async function extractOrder(text) {
   const msg = await anthropic.messages.create({
@@ -143,11 +212,22 @@ async function extractOrder(text) {
       "Fields can appear in ANY order. " +
       "Return ONLY strict JSON with exactly these keys: " +
       '"name", "number", "address", "city", "products", "quantity", "price". ' +
+
       "A neighborhood, street, area, quartier, residence, or landmark belongs in address, not city. " +
-      "Common Moroccan cities include Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, Larache, Ksar El Kebir, Khemisset, Guelmim, Berrechid, Wazzan, Taourirt, Berkane, Sidi Slimane, Errachidia, Sidi Kacem, Essaouira, Khenifra, Tiznit, Ouarzazate, Ifrane, Al Hoceima, Taroudant, Chefchaouen, Fquih Ben Salah, Youssoufia, Azrou. " +
+
+      "Common Moroccan cities include Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, " +
+      "Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, " +
+      "Larache, Ksar El Kebir, Khemisset, Guelmim, Berrechid, Wazzan, Taourirt, Berkane, Sidi Slimane, " +
+      "Errachidia, Sidi Kacem, Essaouira, Khenifra, Tiznit, Ouarzazate, Ifrane, Al Hoceima, Taroudant, " +
+      "Chefchaouen, Fquih Ben Salah, Youssoufia, Azrou. " +
+
       "CRITICAL RULE: any text containing ENZO is ALWAYS a product, never a customer name. " +
-      "If products are present but quantity is not written, set quantity to 1. " +
-      "price must contain digits only. " +
+
+      "If there are multiple products, return products as an array. " +
+      "If there are multiple quantities, return quantity as an array in the same order. " +
+      "If a product has no quantity written, use quantity 1 for that product. " +
+
+      "price must contain digits only, without dh, DH, DHS, MAD, or spaces. " +
       "number must contain digits only; convert +212 to a leading 0. " +
       "If a field is missing, set it to null. Do not invent information.",
 
@@ -177,16 +257,16 @@ async function extractOrder(text) {
       order.price = String(order.price).replace(/\D/g, "");
     }
 
-    if (order.products && !order.quantity) {
-      order.quantity = "1";
-    }
-
-    return order;
+    return normalizeProductsAndQuantity(order);
   } catch (error) {
     console.error("Could not parse Claude response:", raw);
     return null;
   }
 }
+
+// ============================================================
+// VALIDATION
+// ============================================================
 
 function validateNormalOrder(order) {
   if (!order) {
@@ -217,6 +297,10 @@ function validateNormalOrder(order) {
     Number(order.price) > 0
   );
 }
+
+// ============================================================
+// CHANGE
+// ============================================================
 
 async function processChange(message) {
   const text = message.text?.body || "";
@@ -271,6 +355,10 @@ async function processChange(message) {
 
   await reactToMessage(message.id, "✅");
 }
+
+// ============================================================
+// WEBHOOK
+// ============================================================
 
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
