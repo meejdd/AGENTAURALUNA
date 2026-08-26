@@ -182,7 +182,6 @@ function normalizeProductsAndQuantity(order) {
     }
   }
 
-  // If no quantity is written, count one for each product.
   if (quantityTotal === 0 && productList.length > 0) {
     quantityTotal = productList.length;
   }
@@ -205,7 +204,6 @@ async function extractOrder(text) {
 
     system:
       "You extract order details from a Moroccan WhatsApp message. " +
-
       "Fields can appear in ANY order. " +
 
       "Return ONLY strict JSON with exactly these keys: " +
@@ -258,7 +256,6 @@ async function extractOrder(text) {
       order.price = String(order.price).replace(/\D/g, "");
     }
 
-    // Backup product detection when Claude does not identify products.
     if (!cleanText(order.products)) {
       const lines = String(text)
         .split(/\r?\n/)
@@ -347,7 +344,7 @@ function validateNormalOrder(order) {
     /^\d+$/.test(String(order.quantity)) &&
     Number(order.quantity) > 0 &&
     /^\d+$/.test(String(order.price)) &&
-    Number(order.price) > 0
+    Number(order.price) >= 0
   );
 }
 
