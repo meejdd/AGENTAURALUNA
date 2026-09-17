@@ -96,7 +96,30 @@ function cleanText(value) {
   return String(value).trim();
 }
 
-function applyRepeatedCityFallback(order, text) {   if (!order || cleanText(order.address) || !cleanText(order.city)) {     return order;   }    const city = cleanText(order.city);   const cityKey = city.toLowerCase();   const matchingLines = String(text || "")     .split(String.fromCharCode(10))     .map(cleanText)     .filter((line) => line.toLowerCase() === cityKey);    if (matchingLines.length >= 2) {     order.address = city;   }    return order; }  function normalizePhone(value) {
+function applyRepeatedCityFallback(order, text) {
+  if (
+    !order ||
+    cleanText(order.address) ||
+    !cleanText(order.city)
+  ) {
+    return order;
+  }
+
+  const city = cleanText(order.city);
+  const cityKey = city.toLowerCase();
+  const matchingLines = String(text || "")
+    .split(/\r?\n/)
+    .map(cleanText)
+    .filter((line) => line.toLowerCase() === cityKey);
+
+  if (matchingLines.length >= 2) {
+    order.address = city;
+  }
+
+  return order;
+}
+
+function normalizePhone(value) {
   let number = String(value || "").replace(/\D/g, "");
 
   if (number.startsWith("00")) {
@@ -308,7 +331,9 @@ async function extractOrder(text) {
       }
     }
 
-    return normalizeProductsAndQuantity(       applyRepeatedCityFallback(order, text)     );
+    return normalizeProductsAndQuantity(
+      applyRepeatedCityFallback(order, text)
+    );
   } catch (error) {
     console.error("Could not parse Claude response:", raw);
     return null;
@@ -321,7 +346,11 @@ async function extractOrder(text) {
 
 function validateNormalOrder(order) {
   if (!order) {
-    return { valid: false, reason: "the order could not be extracted" };
+    return {
+      valid: false,
+      critical: false,
+      reason: "the order could not be extracted",
+    };
   }
 
   const requiredFields = [
@@ -334,6 +363,14 @@ function validateNormalOrder(order) {
     "price",
   ];
 
+  const criticalFields = [
+    "number",
+    "address",
+    "city",
+    "products",
+    "price",
+  ];
+
   const missingFields = requiredFields.filter(
     (field) => !cleanText(order[field])
   );
@@ -341,23 +378,38 @@ function validateNormalOrder(order) {
   if (missingFields.length > 0) {
     return {
       valid: false,
+      critical: missingFields.some((field) =>
+        criticalFields.includes(field)
+      ),
       reason: `missing ${missingFields.join(", ")}`,
     };
   }
 
   if (!normalizePhone(order.number)) {
-    return { valid: false, reason: "invalid phone number" };
+    return {
+      valid: false,
+      critical: true,
+      reason: "invalid phone number",
+    };
   }
 
   if (!/^\d+$/.test(String(order.quantity)) || Number(order.quantity) <= 0) {
-    return { valid: false, reason: "invalid quantity" };
+    return {
+      valid: false,
+      critical: false,
+      reason: "invalid quantity",
+    };
   }
 
   if (!/^\d+$/.test(String(order.price)) || Number(order.price) < 0) {
-    return { valid: false, reason: "invalid price" };
+    return {
+      valid: false,
+      critical: true,
+      reason: "invalid price",
+    };
   }
 
-  return { valid: true, reason: "" };
+  return { valid: true, critical: false, reason: "" };
 }
 
 // ============================================================
@@ -380,6 +432,7 @@ async function processChange(message) {
 
   if (!number) {
     console.log("Change refused: no valid phone number was found.");
+    await reactToMessage(message.id, "❌");
     return;
   }
 
@@ -392,15 +445,27 @@ async function processChange(message) {
 
   const oldOrder = result.order;
 
+  const missingCriticalChangeFields = [
+    !oldOrder.address && "address",
+    !oldOrder.city && "city",
+    !newOrder.products && "products",
+    !newOrder.price && "price",
+  ].filter(Boolean);
+
   if (
     !oldOrder.ma ||
-    !oldOrder.address ||
-    !oldOrder.city ||
-    !newOrder.products ||
-    !newOrder.quantity ||
-    !newOrder.price
+    missingCriticalChangeFields.length > 0 ||
+    !newOrder.quantity
   ) {
-    console.log("Change refused: required old or new order details are missing.");
+    console.log(
+      "Change refused: required old or new order details are missing.",
+      missingCriticalChangeFields
+    );
+
+    if (missingCriticalChangeFields.length > 0) {
+      await reactToMessage(message.id, "❌");
+    }
+
     return;
   }
 
@@ -465,6 +530,11 @@ app.post("/webhook", (req, res) => {
             `Order refused: ${validation.reason}`,
             order
           );
+
+          if (validation.critical) {
+            await reactToMessage(message.id, "❌");
+          }
+
           continue;
         }
 
