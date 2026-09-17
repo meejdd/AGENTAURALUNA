@@ -95,7 +95,9 @@ function cleanText(value) {
   return String(value).trim();
 }
 
-function normalizePhone(value) {
+function applyRepeatedCityFallback(order, text) {   if (!order || cleanText(order.address) || !cleanText(order.city)) {     return order;   }    const city = cleanText(order.city);   const cityKey = city.toLowerCase();   const matchingLines = String(text || "")     .split(/
+?
+/)     .map(cleanText)     .filter((line) => line.toLowerCase() === cityKey);    if (matchingLines.length >= 2) {     order.address = city;   }    return order; }  function normalizePhone(value) {
   let number = String(value || "").replace(/\D/g, "");
 
   if (number.startsWith("00")) {
@@ -209,7 +211,7 @@ async function extractOrder(text) {
       "Return ONLY strict JSON with exactly these keys: " +
       '"name", "number", "address", "city", "products", "quantity", "price". ' +
 
-      "A neighborhood, street, area, quartier, residence, or landmark belongs in address, not city. " +
+      "A neighborhood, street, area, quartier, residence, or landmark belongs in address, not city. " +       "If the same city name is written twice, use one occurrence as address and the other as city; do not reject the order for that. " +
 
       "Common Moroccan cities include Casablanca, Rabat, Sale, Fes, Marrakech, Tanger, Agadir, Meknes, " +
       "Oujda, Kenitra, Tetouan, Safi, Mohammedia, Khouribga, El Jadida, Beni Mellal, Nador, Taza, Settat, " +
@@ -307,7 +309,7 @@ async function extractOrder(text) {
       }
     }
 
-    return normalizeProductsAndQuantity(order);
+    return normalizeProductsAndQuantity(       applyRepeatedCityFallback(order, text)     );
   } catch (error) {
     console.error("Could not parse Claude response:", raw);
     return null;
