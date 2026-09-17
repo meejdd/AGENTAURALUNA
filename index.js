@@ -1,3 +1,4 @@
+
 require("dotenv").config();
 
 const express = require("express");
@@ -95,9 +96,7 @@ function cleanText(value) {
   return String(value).trim();
 }
 
-function applyRepeatedCityFallback(order, text) {   if (!order || cleanText(order.address) || !cleanText(order.city)) {     return order;   }    const city = cleanText(order.city);   const cityKey = city.toLowerCase();   const matchingLines = String(text || "")     .split(/
-?
-/)     .map(cleanText)     .filter((line) => line.toLowerCase() === cityKey);    if (matchingLines.length >= 2) {     order.address = city;   }    return order; }  function normalizePhone(value) {
+function applyRepeatedCityFallback(order, text) {   if (!order || cleanText(order.address) || !cleanText(order.city)) {     return order;   }    const city = cleanText(order.city);   const cityKey = city.toLowerCase();   const matchingLines = String(text || "")     .split(String.fromCharCode(10))     .map(cleanText)     .filter((line) => line.toLowerCase() === cityKey);    if (matchingLines.length >= 2) {     order.address = city;   }    return order; }  function normalizePhone(value) {
   let number = String(value || "").replace(/\D/g, "");
 
   if (number.startsWith("00")) {
@@ -322,7 +321,7 @@ async function extractOrder(text) {
 
 function validateNormalOrder(order) {
   if (!order) {
-    return false;
+    return { valid: false, reason: "the order could not be extracted" };
   }
 
   const requiredFields = [
@@ -335,19 +334,30 @@ function validateNormalOrder(order) {
     "price",
   ];
 
-  for (const field of requiredFields) {
-    if (!cleanText(order[field])) {
-      return false;
-    }
+  const missingFields = requiredFields.filter(
+    (field) => !cleanText(order[field])
+  );
+
+  if (missingFields.length > 0) {
+    return {
+      valid: false,
+      reason: `missing ${missingFields.join(", ")}`,
+    };
   }
 
-  return (
-    Boolean(normalizePhone(order.number)) &&
-    /^\d+$/.test(String(order.quantity)) &&
-    Number(order.quantity) > 0 &&
-    /^\d+$/.test(String(order.price)) &&
-    Number(order.price) >= 0
-  );
+  if (!normalizePhone(order.number)) {
+    return { valid: false, reason: "invalid phone number" };
+  }
+
+  if (!/^\d+$/.test(String(order.quantity)) || Number(order.quantity) <= 0) {
+    return { valid: false, reason: "invalid quantity" };
+  }
+
+  if (!/^\d+$/.test(String(order.price)) || Number(order.price) < 0) {
+    return { valid: false, reason: "invalid price" };
+  }
+
+  return { valid: true, reason: "" };
 }
 
 // ============================================================
@@ -359,7 +369,7 @@ async function processChange(message) {
   const newOrder = await extractOrder(text);
 
   if (!newOrder) {
-    await reactToMessage(message.id, "❌");
+    console.log("Change refused: new order details could not be extracted.");
     return;
   }
 
@@ -369,14 +379,14 @@ async function processChange(message) {
     normalizePhone(message.from);
 
   if (!number) {
-    await reactToMessage(message.id, "❌");
+    console.log("Change refused: no valid phone number was found.");
     return;
   }
 
   const result = await findLastOrderByNumber(number);
 
   if (!result || !result.found || !result.order) {
-    await reactToMessage(message.id, "❌");
+    console.log("Change refused: no previous order was found for this number.");
     return;
   }
 
@@ -390,7 +400,7 @@ async function processChange(message) {
     !newOrder.quantity ||
     !newOrder.price
   ) {
-    await reactToMessage(message.id, "❌");
+    console.log("Change refused: required old or new order details are missing.");
     return;
   }
 
@@ -448,10 +458,13 @@ app.post("/webhook", (req, res) => {
           JSON.stringify(order)
         );
 
-        if (!validateNormalOrder(order)) {
-          console.log("Invalid order:", order);
+        const validation = validateNormalOrder(order);
 
-          await reactToMessage(message.id, "❌");
+        if (!validation.valid) {
+          console.log(
+            `Order refused: ${validation.reason}`,
+            order
+          );
           continue;
         }
 
@@ -468,9 +481,10 @@ app.post("/webhook", (req, res) => {
 
         await reactToMessage(message.id, "✅");
       } catch (error) {
-        console.error("Order processing failed:", error);
-
-        await reactToMessage(message.id, "❌");
+        console.error(
+          "Order refused because processing failed:",
+          error
+        );
       }
     }
   })();
